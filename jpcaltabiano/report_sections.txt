@@ -1,0 +1,53 @@
+EDA
+Things I am assuming we all did and am not fully writing about yet:
+- Statistics about location ({number of records, time ranges, etc} per location)
+- What percent of each column is NA value
+- What the class balance is
+
+What I did:
+- distribution of wind direction vs speed
+- distribution statistics of all data after normalization
+
+We saw that the wind data was in two parts - the direction (a string indicating the cardinal direction, ex. "NNW") and the speed. This format makes for a poor feature, as directions are categorical with many possible categories, and direction should not matter was much when speed is very low. Knowing this was something that needed to be adressed during the feature engineering stage, we plotted the distribution of the wind directions against their speeds. After engineering new wind features, we computed the same plot and compared the two to view the efficacy of our feature engineering. 
+
+One way we investiagted the distributions of the data was with a violin plot. We first normalized. For each value, we subtracted its column's mean and divided by its column's standard deviation. Plotting the data, we could see that the Rainfall column had a wide distribution with some outliers. The rest of the data seemed well distributed. Digging further into Rainfall, we saw that with a minimum value of 0, the 25% and 50% quartiles were also 0, the the 75% quartile was 0.8. However, the mximum value was 367.6, an incredibly distant outlier.  
+As a note, this was only able to be done after some feature engineering and data cleaning had been completed, but the information was still used during the EDA stage as it was a good tool for understanding distribution.
+
+
+Preprocessing 
+Things I am assuming we all did and am not fully writing about yet:
+- Convert RainToday and RainTomorrow columns from ('Yes', 'No') to (1, 0)
+- Drop RISK_MM column
+- Drop NA
+- Sequence window
+
+What I did:
+- Drop more columns
+- Wind to vector
+- Time to cyclic
+
+In order for the data to work with most of our methods, we could not have an NA values in the data. However, we saw that dropping all records with NA would remove a large portion of the dataset. We discovered during EDA that the Evaporation, Sunshine, Cloud9am, and Cloud3pm were each about 40% NA. We dropped these columns completely before removing NA values in bulk, which caused only a ~10% reduction in total data. 
+
+During EDA we had found that the wind data would cause many issues in its original form. To address this, we chose to convert the data from direction+speed format to a vector in X+Y format. To do this, we first converted each of the 16 cardinal directions used to their respective angles in radians, then calculated the X and Y values as the speed multiplied by the cosine and sine of their angles, respectively. We again plotted the distribution of the directions vs speeds and found a much more uniformly distributed feature that solved the original issues, and also avoided the problem of the models failing to understand the cyclic nature of directional values, either cardinal or degree (i.e. 365 is folloed by 0 degrees).
+
+For sequential models, we knew the date was necessary for knowing order of the data, but it did not seem like it would be a useful feature, especially in dd/mm/yyyy form. However, we wanted to maintain some information about what time of year the data was taken during, as there were clear seasonal patterns in the data. To do this, we two new features 'yearsin' and 'yearcos' that contained information about what part of the year the data was from. These were calculated by taking the sine and cosine of the timestamp (in seconds) miltiplied by (2pi / number of seconds in a year). This proved to be especially useful for time sequence methods like the recursive neural network, increasing F1 score by ~5%. 
+
+In order to use sequential models, we needed to format the data as a set of sequence windows of the data. We modified and used a class from a Keras guide to create a window-based dataset, where we could specify the number of records for the input, the number of labels we wanted to predict, and the step between the final record of the sequence, and the record for which we wanted our (first) prediction. For example, most models needed their data formatted like this were trained using windows of 7 records, with a goal to predict 1 label 1 step away (input is day 1-7, predict 8).
+
+
+Methods
+
+We tried a collection neural netowrk-based models. Many of the simpler models were for acquiring baseline, or for 'proof-of-concept', and were not intended as polished methods. We wanted to focus on sequential neural network models. As such, we did not attempt to find the optimal hyperparamters for these methods, instead opting to use the defaults. All models used binary crossentropy loss, the Adam optimizer, and monitored validaiton loss for early training stoppage if it reamined constant for more then 2 epochs. Unless otherwise specified, all models were trained using 20 as the initial value for the number of epochs. 
+
+The first model we tried was the simplest possible. It contained one dense layer of size 1, with the sigmoid activation function for classification. We used a learning rate of 0.001. This model was very easy to overfit. Often, the training accuracy would be exactly equal to the percentage of one class in the data. For example, often training accuracy was .7811, when 78.11% of the dataset was class 0. ** PERFORMANCE HERE **
+
+We then tried a more complicated linear model, with two dense layers of size 64 using ReLU for activation, and one final size 1 sigmoid dense layer. ** PERFORMANCE HERE ** A multi-step linear model was also experimented with. This had the same structure as the previous model, but preceeded those layers with a flatten layer, and reshaped the output after the final dense layer. ** PERFORMANCE HERE **
+
+CNN - leave for Si
+
+To leverage the sequential nature of our data, we created a recursive neural network. These models consider the output of one step as part of the input to the next step to allow data to influence the predictions on following data. We used long short-term memory (LSTM) layers for recursion, and a final size 1 sigmoid dense layer for output. We ran many experiments to determine the ideal model structure. For the size of the LSTM layers, we tried sizes of 2^1 to 2^7 and found that smaller sizes performed significantly better. Along with these, we also tried learning rates from 10^-2 to 10^-5. The best results were for layer sizes around {2, 4, 8} and a learning rate of 10^-4, depending on the rest of the structure and hyperparameters. With our data being do unbalanced, avoiding overfitting was a contant battle. Larger sized LSTM layers sent the model into a sprial of overfitting very easily. Additionally, have more than one LSTM layer did the same. Adding dropout layers between did not help, so we settled on using one LSTM layer of size 4. We also wanted to explore making the layer bidirectional, which would cause it to process the sequence of data first start-to-end, then end-to-start. We found that this did improve the model's performance, although only slightly. We are not confident that the improvements seen here are direct results of the bidirectionality instead of simply getting luckier seeds for the model's internal randomness, however. 
+
+After finding the best structure, we experimented with the best shape for the input window. We did not need to predict more than 1 day in advance, so the time step always remained 1. We also did not care about getting a prediction for every day in the window, only the final day. For example, if our window contains 7 days, we only need to make a prediction using the 7th day's record, the rest of the records train the LSTM cells. We tried windows of 1, 7, 14, and 30 days. 1 day obviously did not perform well as it defeats the purpose of leveraging a sequential model. 30 days proved to be too many, as the patterns that occured before rainfall did not extend that far back. We found models trained on a 7-day window to be the most successful. 
+** PERFORMANCE HERE **
+
+One issue that we were aware of while working on the RNN model was that the model would not understand that when the records switched from one location to the next, it was the start of a new sequence. These records were a small overall percent of the total data (only 7 rows at the start and end per each of 44 locations if using a window of size 7), but we wanted to experiment with training one model on the data from each location individually, and combine the outputs. This proved to be a much more difficult task than expected. The most glaring problem was that the hyperparameters and model structure tuned on the entire dataset would not only be less-than-optimal for a smaller dataset, but that each location's data would have require a different model structure and hyperparameters if each were to be optimal. Finding the optimal model for all 44 locations total was out of the scope for this project, so we optimized everything on the first location, Albury, and used that structure and hyperparameter set for all the models. We also attempted to train an actual ensemble model that laterally merged all layers from all models and made a prediction by computing all the models' outputs in a dense sigmoid layer, but this code created more bugs than we had time to solve. We settled on gathering predictions (in single-class probability form) on the same data for each model seperately, then averaging their predictions for each day and using a cutoff of x>0.5 to determine the predicted class. This gave a terrible F1 score below 0.2. Plotting the loss and accuracy for each model, it was clear many had the wrong structure for the data. Most models had consistent accuracy at the percent of the data of class 0, or hit a stable accuracy after the first or second epoch. These are key indicators of overfitting. To make things worse, they were permitted to train for the full amount of epochs (10) and were not stopped early, as the loss continued to decreased even if accuracy was consistent. This just shows that the models were becoming more and more dramatically overfit. We ended up throwing out all of these models and kept a subset of just 8 models that were successful. The results when only using these in the ensemble predictions were significantly better. ** PERFORMANCE HERE **
